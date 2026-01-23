@@ -1,0 +1,43 @@
+# Terraform CI/CD Pipeline
+steps:
+  # 1. Terraform lint and validate
+  - name: 'hashicorp/terraform:1.5'
+    id: 'terraform-init'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        cd terraform
+        terraform init
+        terraform validate
+        terraform fmt -check
+
+  # 2. Plan
+  - name: 'hashicorp/terraform:1.5'
+    id: 'terraform-plan'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        cd terraform
+        terraform plan \
+          -var="project_id=${PROJECT_ID}" \
+          -var="image_tag=${SHORT_SHA}" \
+          -out=tfplan
+    waitFor: ['terraform-init']
+
+  # 3. Apply (for main branch only)
+  - name: 'hashicorp/terraform:1.5'
+    id: 'terraform-apply'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        if [ "$BRANCH_NAME" = "main" ]; then
+          echo "Applying Terraform changes..."
+          cd terraform
+          terraform apply -auto-approve tfplan
+        else
+          echo "Skipping apply for non-main branch"
+        fi
+    waitFor: ['terraform-plan']
