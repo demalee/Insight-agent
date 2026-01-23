@@ -1,7 +1,7 @@
 variable "project_id" {
   description = "GCP Project ID"
   type        = string
-  default     = "insight-agent-pawa-it" # Set via env var or terraform.tfvars
+  default     = "insight-agent-pawa-it"
 }
 
 variable "region" {
@@ -16,26 +16,100 @@ variable "service_name" {
   default     = "insight-agent"
 }
 
+variable "environment" {
+  description = "Environment (dev, staging, prod)"
+  type        = string
+  default     = "dev"
+  validation {
+    condition     = contains(["dev", "staging", "prod"], var.environment)
+    error_message = "Environment must be dev, staging, or prod."
+  }
+}
+
 variable "image_tag" {
   description = "Docker image tag"
   type        = string
   default     = "latest"
 }
 
-variable "environment" {
-  description = "Environment (dev, staging, prod)"
+variable "image_source" {
+  description = "Source of Docker image (dockerhub or artifact-registry)"
   type        = string
-  default     = "prod"
+  default     = "artifact-registry"
+  validation {
+    condition     = contains(["dockerhub", "artifact-registry"], var.image_source)
+    error_message = "Image source must be dockerhub or artifact-registry."
+  }
 }
 
-variable "allowed_ips" {
-  description = "List of IP addresses allowed to access the service"
-  type        = list(string)
-  default     = []
+variable "public_access" {
+  description = "Allow public access to the service (MUST be false for security)"
+  type        = bool
+  default     = false # SECURITY REQUIREMENT: Must be false
 }
 
-variable "service_account_email" {
-  description = "Service account email for Cloud Run"
+variable "container_port" {
+  description = "Container port"
+  type        = number
+  default     = 8080
+}
+
+variable "cpu_limit" {
+  description = "CPU limit"
   type        = string
-  default     = null
+  default     = "1000m"
+}
+
+variable "memory_limit" {
+  description = "Memory limit"
+  type        = string
+  default     = "512Mi"
+}
+
+variable "container_concurrency" {
+  description = "Maximum number of concurrent requests per container"
+  type        = number
+  default     = 80
+}
+
+variable "timeout_seconds" {
+  description = "Request timeout in seconds"
+  type        = number
+  default     = 300
+}
+
+variable "min_scale" {
+  description = "Minimum number of container instances"
+  type        = number
+  default     = 0
+}
+
+variable "max_scale" {
+  description = "Maximum number of container instances"
+  type        = number
+  default     = 10
+}
+
+variable "custom_domain" {
+  description = "Custom domain for the service"
+  type        = string
+  default     = ""
+}
+
+variable "enable_secrets" {
+  description = "Enable Secret Manager integration"
+  type        = bool
+  default     = false
+}
+
+variable "cloudsql_instance" {
+  description = "Cloud SQL instance connection name"
+  type        = string
+  default     = ""
+}
+
+variable "allowed_service_account" {
+  description = "Service account allowed to invoke the private Cloud Run service"
+  type        = string
+  default     = "" # Set to specific service account email
 }
