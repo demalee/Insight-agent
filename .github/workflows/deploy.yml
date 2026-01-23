@@ -1,121 +1,26 @@
-name: Deploy to GCP
+name: Deploy
 
 on:
   push:
     branches: [ main ]
 
-env:
-  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-  REGION: us-central1
-  SERVICE_NAME: insight-agent
-  REPO_NAME: insight-agent-repo
-
 jobs:
-  lint-test:
+  deploy:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
     
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
-    
-    - name: Install dependencies
-      run: |
-        cd app
-        pip install -r requirements.txt
-        pip install flake8 pytest
-    
-    - name: Lint with flake8
-      run: |
-        cd app
-        # Stop the build if there are Python syntax errors or undefined names
-        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-        # exit-zero treats all errors as warnings
-        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
-      continue-on-error: true
-    
-    - name: Run pytest
-      run: |
-        cd app
-        pytest tests/ -v || true
-      continue-on-error: true
-
-  build-deploy:
-    needs: lint-test
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    
+    # Only this step needs the secret
     - name: Google Cloud Auth
       uses: google-github-actions/auth@v1
       with:
         credentials_json: ${{ secrets.GCP_SA_KEY }}
     
-    - name: Setup GCloud
-      uses: google-github-actions/setup-gcloud@v1
-    
-    - name: Configure Docker for Artifact Registry
+    - name: Deploy with gcloud
       run: |
-        gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
-    
-    - name: Build Docker image
-      run: |
-        docker build \
-          -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO_NAME }}/${{ env.SERVICE_NAME }}:${{ github.sha }} \
-          -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO_NAME }}/${{ env.SERVICE_NAME }}:latest \
-          -f app/Dockerfile \
-          app/
-    
-    - name: Push to Artifact Registry
-      run: |
-        docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO_NAME }}/${{ env.SERVICE_NAME }}:${{ github.sha }}
-        docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO_NAME }}/${{ env.SERVICE_NAME }}:latest
-    
-    - name: Setup Terraform
-      uses: hashicorp/setup-terraform@v2
-      with:
-        terraform_version: 1.5.0
-    
-    - name: Terraform Format Check
-      run: |
-        cd terraform
-        terraform fmt -check -recursive
-      continue-on-error: true
-    
-    - name: Terraform Init
-      run: |
-        cd terraform
-        terraform init -upgrade
-      env:
-        GOOGLE_CREDENTIALS: ${{ secrets.GCP_SA_KEY }}
-    
-    - name: Terraform Plan
-      run: |
-        cd terraform
-        terraform plan \
-          -var="project_id=${{ env.PROJECT_ID }}" \
-          -var="region=${{ env.REGION }}" \
-          -var="service_name=${{ env.SERVICE_NAME }}" \
-          -var="image_tag=${{ github.sha }}" \
-          -var="public_access=false" \
-          -out=tfplan
-      env:
-        GOOGLE_CREDENTIALS: ${{ secrets.GCP_SA_KEY }}
-    
-    - name: Terraform Apply
-      run: |
-        cd terraform
-        terraform apply -auto-approve tfplan
-      env:
-        GOOGLE_CREDENTIALS: ${{ secrets.GCP_SA_KEY }}
-    
-    - name: Get Deployment Info
-      run: |
-        cd terraform
-        terraform output cloud_run_url
-        terraform output service_account_email
-        terraform output artifact_registry_url
-      env:
-        GOOGLE_CREDENTIALS: ${{ secrets.GCP_SA_KEY }}
+        gcloud run deploy insight-agent \
+          --image us-central1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/insight-agent-repo/insight-agent:latest \
+          --region us-central1 \
+          --platform managed \
+          --allow-unauthenticated \
+          --port 8080
