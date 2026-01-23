@@ -68,7 +68,6 @@ def analyze_text(text: str) -> Dict[str, Any]:
     sentences = [s.strip() for s in text.replace('!', '.').replace('?', '.').split('.') if s.strip()]
     sentence_count = len(sentences) if sentences else 1
     
-    # Simple sentiment analysis (placeholder - integrate ML model in production)
     positive_words = ["love", "furaha", "excellent", "good", "happy", "awesome"]
     negative_words = ["hate", "bad", "terrible", "awful", "poor"]
     
@@ -114,5 +113,19 @@ async def analyze_text_endpoint(
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("PORT", 8080))
+    port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
+    
+@app.get("/")
+async def root():
+    """Root endpoint with API information"""
+    return {
+        "message": "Insight-Agent API is running!",
+        "status": "healthy",
+        "version": "1.0.0",
+        "try_these": {
+            "health_check": "http://127.0.0.1:8000/health",
+            "documentation": "http://127.0.0.1:8000/docs",
+            "analyze_endpoint": "POST http://127.0.0.1:8000/analyze"
+        }
+    }
