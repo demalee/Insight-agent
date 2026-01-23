@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.class
+*.so
+.Python
+env/
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# # Terraform
+# terraform/
+# *.tfstate
+# *.tfstate.*
+# .terraform.tfstate.lock.info
+# terraform.tfvars
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets
+*.key
+*.pem
+*.cert
+secrets/
+.env
+*.json

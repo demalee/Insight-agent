@@ -1,0 +1,141 @@
+name: Deploy to GCP Cloud Run
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  GCP_REGION: us-central1
+  SERVICE_NAME: insight-agent
+  ARTIFACT_REGISTRY: ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/insight-agent-repo
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        cd app
+        pip install -r requirements.txt
+        pip install pytest
+    
+    - name: Run tests
+      run: |
+        cd app
+        pytest tests/ -v
+    
+    - name: Lint Python code
+      run: |
+        pip install black flake8
+        cd app
+        black --check .
+        flake8 .
+
+  terraform-validate:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v2
+      with:
+        terraform_version: 1.5.0
+    
+    - name: Terraform Init
+      run: terraform init
+      working-directory: ./terraform
+    
+    - name: Terraform Validate
+      run: terraform validate
+      working-directory: ./terraform
+    
+    - name: Terraform Format Check
+      run: terraform fmt -check
+      working-directory: ./terraform
+
+  build-and-deploy:
+    needs: [test, terraform-validate]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Google Cloud Auth
+      uses: google-github-actions/auth@v1
+      with:
+        credentials_json: ${{ secrets.GCP_SA_KEY }}
+    
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v1
+      with:
+        project_id: ${{ secrets.GCP_PROJECT_ID }}
+    
+    - name: Configure Docker
+      run: |
+        gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
+    
+    - name: Build Docker image
+      run: |
+        cd app
+        docker build -t ${{ env.ARTIFACT_REGISTRY }}/insight-agent:${{ github.sha }} .
+    
+    - name: Push Docker image
+      run: |
+        docker push ${{ env.ARTIFACT_REGISTRY }}/insight-agent:${{ github.sha }}
+        docker tag ${{ env.ARTIFACT_REGISTRY }}/insight-agent:${{ github.sha }} ${{ env.ARTIFACT_REGISTRY }}/insight-agent:latest
+        docker push ${{ env.ARTIFACT_REGISTRY }}/insight-agent:latest
+    
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v2
+      with:
+        terraform_version: 1.5.0
+    
+    - name: Terraform Plan
+      id: plan
+      run: |
+        cd terraform
+        terraform init
+        terraform plan \
+          -var="project_id=${{ secrets.GCP_PROJECT_ID }}" \
+          -var="image_tag=${{ github.sha }}" \
+          -out=tfplan
+        
+      env:
+        GOOGLE_CREDENTIALS: ${{ secrets.GCP_SA_KEY }}
+    
+    - name: Terraform Apply
+      if: success()
+      run: |
+        cd terraform
+        terraform apply -auto-approve tfplan
+      env:
+        GOOGLE_CREDENTIALS: ${{ secrets.GCP_SA_KEY }}
+    
+    - name: Run Integration Test
+      run: |
+        # Wait for service to be ready
+        sleep 30
+        
+        # Get Cloud Run URL from Terraform output
+        cd terraform
+        URL=$(terraform output -raw cloud_run_url)
+        
+        # Make authenticated request
+        TOKEN=$(gcloud auth print-identity-token)
+        
+        curl -X POST ${{ secrets.CLOUD_RUN_URL }}/analyze \
+          -H "Authorization: Bearer $TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"text": "Test from CI/CD pipeline"}' \
+          --verbose || echo "Test completed"

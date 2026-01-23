@@ -1,0 +1,46 @@
+steps:
+- name: 'python:3.11-slim'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    cd app
+    pip install -r requirements.txt
+    echo "Dependencies installed"
+
+- name: 'gcr.io/cloud-builders/docker'
+  args:
+  - 'build'
+  - '-t'
+  - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO_NAME}/${_SERVICE_NAME}:${_SHORT_SHA}'
+  - '-f'
+  - 'app/Dockerfile'
+  - 'app/'
+
+- name: 'gcr.io/cloud-builders/docker'
+  args:
+  - 'push'
+  - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO_NAME}/${_SERVICE_NAME}:${_SHORT_SHA}'
+
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    gcloud run deploy ${_SERVICE_NAME} \
+      --image ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO_NAME}/${_SERVICE_NAME}:${_SHORT_SHA} \
+      --region ${_REGION} \
+      --platform managed \
+      --allow-unauthenticated \
+      --port 8080
+
+timeout: 900s
+
+substitutions:
+  _SERVICE_NAME: 'insight-agent'
+  _REGION: 'us-central1'
+  _REPO_NAME: 'insight-agent-repo'
+  _SHORT_SHA: 'latest'
+
+images:
+- '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO_NAME}/${_SERVICE_NAME}:${_SHORT_SHA}'
