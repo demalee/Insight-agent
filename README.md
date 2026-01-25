@@ -119,7 +119,7 @@ gcloud run deploy text-analyzer \
 sampe output :
 
 {
-  "original_text": "This is a wonderful test",
+  "original_text": "I love cloud engineering",
   "word_count": 5,
   "character_count": 24,
   "sentence_count": 1,
