@@ -18,7 +18,7 @@ if os.environ.get("K_SERVICE"):  # Running on GCP (Google Cloud Platform)
 else:
     logging.basicConfig(level=logging.INFO)    # When running locally, use basic console logging
 
-logger = logging.getLogger(__name__)
+ logger = logging.getLogger(__name__)
 
 # Security
 
@@ -44,7 +44,7 @@ class TextAnalysisResponse(BaseModel):
 
 app = FastAPI(
     title="Insight-Agent API",
-    description="AI-powered text analysis service for customer feedback",
+    description="AI-powered text analysis service for customer feedback and insights.Deployed on cloud platforms like GCP Cloud Run.",
     version="1.0.0"
 )
 
