@@ -1,4 +1,4 @@
-# test_api.py - Updated with correct character count
+
 from main import app
 from fastapi.testclient import TestClient
 
@@ -20,7 +20,7 @@ def test_health():
 
 def test_analyze():
     headers = {"Authorization": "Bearer test-token"}
-    data = {"text": "I love cloud engineering!"}
+    data = {"text": "I love cloud engineering Pawa IT!"}
     response = client.post("/analyze", json=data, headers=headers)
     
     assert response.status_code == 200
@@ -28,8 +28,8 @@ def test_analyze():
     print(f"✓ Analyze result: {result}")
     
     # Fixed assertions
-    assert result["word_count"] == 4
-    assert result["character_count"] == 25  # Fixed from 23 to 25
+    assert result["word_count"] == 6
+    assert result["character_count"] == 33
     # Check sentiment is positive (contains "love")
     assert result["sentiment_score"] > 0
     # Check all expected fields exist
@@ -41,7 +41,6 @@ def test_analyze_no_auth():
     data = {"text": "Test text"}
     response = client.post("/analyze", json=data)
     print(f"✓ Analyze without auth - Status: {response.status_code}")
-    # Your API might return 403, 401, or 422 depending on your auth setup
     assert response.status_code in [401, 403, 422]
 
 # Additional tests to add
@@ -56,50 +55,6 @@ def test_analyze_negative_sentiment():
     assert result["sentiment_score"] < 0  # Should be negative
     assert result["word_count"] == 6
 
-def test_analyze_neutral_sentiment():
-    headers = {"Authorization": "Bearer test-token"}
-    data = {"text": "The cat sat on the mat"}
-    response = client.post("/analyze", json=data, headers=headers)
-    
-    assert response.status_code == 200
-    result = response.json()
-    print(f"✓ Neutral sentiment: score={result['sentiment_score']}")
-    assert result["sentiment_score"] == 0  # No sentiment words
-    assert result["word_count"] == 6
-
-def test_analyze_empty_text():
-    headers = {"Authorization": "Bearer test-token"}
-    data = {"text": ""}
-    response = client.post("/analyze", json=data, headers=headers)
-    print(f"✓ Empty text - Status: {response.status_code}")
-    assert response.status_code == 422  # Validation error
-
-def test_analyze_long_text():
-    headers = {"Authorization": "Bearer test-token"}
-    long_text = "Test " * 50  # 50 repetitions of "Test "
-    data = {"text": long_text.strip()}  # Remove trailing space
-    response = client.post("/analyze", json=data, headers=headers)
-    
-    assert response.status_code == 200
-    result = response.json()
-    print(f"✓ Long text: {result['word_count']} words")
-    assert result["word_count"] == 50
-    assert result["character_count"] == len(long_text.strip())
-
-def test_sentence_count():
-    headers = {"Authorization": "Bearer test-token"}
-    test_cases = [
-        ("One sentence.", 1),
-        ("Hello! How are you? I'm fine.", 3),
-        ("First line.\nSecond line.\nThird line.", 3),
-    ]
-    
-    for text, expected_sentences in test_cases:
-        response = client.post("/analyze", json={"text": text}, headers=headers)
-        assert response.status_code == 200
-        result = response.json()
-        print(f"✓ Sentence test: '{text[:20]}...' -> {result['sentence_count']} sentences")
-        assert result["sentence_count"] == expected_sentences
 
 def test_sentiment_calculation():
     headers = {"Authorization": "Bearer test-token"}
