@@ -143,3 +143,132 @@ project-root/
 │       └── deploy.yml     # GitHub Actions pipeline
 ├── .gitignore
 └── README.md
+
+
+#Deployment flow
+
+[1] Git Push 
+    ↓
+[2] GitHub Webhook → GitHub Actions Trigger
+    ↓
+[3] GCP Authentication
+    ↓
+[4] Terraform Apply
+    ↓
+[5]  CLOUD BUILD  
+    │   (Runs cloudbuild.yaml in GCP)
+    ↓
+[6] Deployment 
+    ↓
+[7] Service Updates
+    ↓
+[8] FINAL URL
+
+#option B deployment bila cloud build but using workflow
+
+[1] Git Push 
+    ↓
+[2] GitHub Webhook → GitHub Actions Workflow Trigger
+    ↓
+[3] GCP Authentication (Service Account)
+    ↓
+[4] Terraform Apply (Infrastructure Creation)
+    ↓
+[5] Docker Build (Local in GitHub Runner)
+    ↓
+[6] Docker Push → Artifact Registry
+    ↓
+[7] Deployment Command (Cloud Run OR GKE)
+    ↓
+[8] Service Creates/Updates with NEW Image
+    ↓
+[9] Health Checks & Traffic Routing
+    ↓
+[10] FINAL URL Available
+    ↓
+[11] (Optional) Custom Domain Mapping
+
+
+#GKE was there , then we choose either we cloud run or GKE then get final URL 
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│                            LOCAL DEVELOPMENT                             │
+│  1. Code in app/main.py          2. Dockerfile in app/                  │
+│  3. terraform/ configs           4. .github/workflows/deployment.yaml   │
+│  5. cloudbuild.yaml (optional)                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                   ▼ git push
+┌─────────────────────────────────────────────────────────────────────────┐
+│                              GITHUB ACTIONS                             │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐        │
+│  │  Checkout Code  │─▶│ GCP Auth & Init │─▶│  Terraform Plan │        │
+│  └─────────────────┘  └─────────────────┘  └─────────────────┘        │
+│                                    │                                   │
+│                                    ▼                                   │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐        │
+│  │ Terraform Apply │─▶│ Docker Build    │─▶│ Docker Push     │        │
+│  └─────────────────┘  └─────────────────┘  └─────────────────┘        │
+│                                    │                                   │
+│                                    ▼                                   │
+│                         ┌─────────────────────┐                        │
+│                         │  DEPLOYMENT STEP    │                        │
+│                         │  (Cloud Run OR GKE) │                        │
+│                         └─────────────────────┘                        │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                 ┌──────────────────┼──────────────────┐
+                 │                  │                  │
+                 ▼                  ▼                  ▼
+      ┌─────────────────┐┌─────────────────┐┌─────────────────┐
+      │   CLOUD RUN     ││      GKE        ││  CLOUD BUILD    │
+      │  Deployment     ││  Deployment     ││  (Alternative)  │
+      └─────────────────┘└─────────────────┘└─────────────────┘
+                 │                  │                  │
+                 ▼                  ▼                  ▼
+        ┌──────────────┐    ┌──────────────┐  ┌──────────────┐
+        │ .a.run.app   │    │ External IP  │  │ Trigger Next │
+        │    URL       │    │   URL        │  │   Step       │
+        └──────────────┘    └──────────────┘  └──────────────┘
+                 │                  │                  │
+                 └──────────────────┼──────────────────┘
+                                    │
+                                    ▼
+                         ┌─────────────────────┐
+                         │   LOAD BALANCER     │
+                         │    CONFIGURATION    │
+                         │  (If using custom   │
+                         │      domain)        │
+                         └─────────────────────┘
+                                    │
+                                    ▼
+                         ┌─────────────────────┐
+                         │    DNS MAPPING      │
+                         │  (Custom Domain →   │
+                         │  Load Balancer)     │
+                         └─────────────────────┘
+                                    │
+                                    ▼
+                         ┌─────────────────────┐
+                         │    FINAL URL        │
+                         │                     │
+                         │  OPTION A:          │
+                         │  https://app.       │
+                         │  yourdomain.com     │
+                         │                     │
+                         │  OPTION B:          │
+                         │  https://app-xxxxxx.│
+                         │  uc.a.run.app       │
+                         │                     │
+                         │  OPTION C:          │
+                         │  http://34.120.xx.xx│
+                         │  (GKE LoadBalancer) │
+                         └─────────────────────┘
+                                    │
+                                    ▼
+                         ┌─────────────────────┐
+                         │       USER          │
+                         │    Access via       │
+                         │    Web Browser      │
+                         │    or API Call      │
+                         └─────────────────────┘

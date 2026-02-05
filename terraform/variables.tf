@@ -1,5 +1,5 @@
 variable "project_id" {
-  description = "GCP Project ID"
+  description = "Insight-agent-pawa-it"
   type        = string
   default     = "insight-agent-pawa-it"
 }
@@ -42,10 +42,16 @@ variable "image_source" {
   }
 }
 
+variable "devdemalee" {
+  description = "devdemalee"
+  type        = string
+  default     = ""
+}
+
 variable "public_access" {
-  description = "Allow public access to the service (MUST be false for security)"
+  description = "Allow public access to the service"
   type        = bool
-  default     = false # SECURITY REQUIREMENT: Must be false
+  default     = true
 }
 
 variable "container_port" {
@@ -108,8 +114,20 @@ variable "cloudsql_instance" {
   default     = ""
 }
 
+variable "image_tag" {
+  description = "Docker image tag for deployment"
+  type        = string
+  default     = "latest"
+}
+
 variable "allowed_service_account" {
   description = "Service account allowed to invoke the private Cloud Run service"
   type        = string
-  default     = "" # Set to specific service account email
+  default     = ""  # Set to specific service account email
+}
+
+variable "environment" {
+  description = "Environment (dev, staging, prod)"
+  type        = string
+  default     = "dev"
 }

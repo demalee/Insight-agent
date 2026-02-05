@@ -1,26 +1,337 @@
-name: Deploy
+name: CI/CD Pipeline
 
 on:
   push:
+    branches: [ main, develop ]
+  pull_request:
     branches: [ main ]
 
+env:
+  GCP_REGION: us-central1
+  GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  ARTIFACT_REGISTRY_REPO: insight-agent-repo
+  SERVICE_NAME: insight-agent
+  CONTAINER_PORT: 8080
+
 jobs:
-  deploy:
+  # CI Phase: Quality checks on all branches and PRs
+  quality-checks:
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/develop'
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          cd app
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Lint with Flake8
+        run: |
+          cd app
+          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+          flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+
+      - name: Format Check with Black
+        run: |
+          cd app
+          black --check --diff .
+
+      - name: Type Check with MyPy
+        run: |
+          cd app
+          mypy --ignore-missing-imports .
+
+      - name: Security Scan with Bandit
+        run: |
+          cd app
+          bandit -r . -f json -o bandit-report.json || true
+
+      - name: Dependency Security Check
+        run: |
+          cd app
+          pip install safety
+          safety check -r requirements.txt --json > safety-report.json || true
+
+      - name: Run Tests with Coverage
+        run: |
+          cd app
+          python -m pytest tests/ -v --cov=. --cov-report=xml --cov-report=html
+
+      - name: Upload Test Coverage
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./app/coverage.xml
+          fail_ci_if_error: false
+
+  # CD Phase: Build and deploy to GCP (only on main branch)
+  build-and-deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    needs: quality-checks
+    environment: production
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # Authentication using Workload Identity (More Secure than Service Account Key)
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v1
+        with:
+          workload_identity_provider: 'projects/${{ secrets.GCP_PROJECT_NUMBER }}/locations/global/workloadIdentityPools/github-pool/providers/github-provider'
+          service_account: '${{ secrets.GCP_SERVICE_ACCOUNT }}'
+          token_format: 'access_token'
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Configure Docker for Artifact Registry
+        run: |
+          gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Terraform Infrastructure (Creates/Updates GCP resources)
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.6.0'
+
+      - name: Terraform Init
+        run: |
+          cd terraform
+          terraform init -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" -reconfigure
+
+      - name: Terraform Plan
+        run: |
+          cd terraform
+          terraform plan -var="project_id=${{ env.GCP_PROJECT_ID }}" \
+                         -var="region=${{ env.GCP_REGION }}" \
+                         -var="service_name=${{ env.SERVICE_NAME }}" \
+                         -var="image_tag=${{ github.sha }}"
+
+      - name: Terraform Apply
+        run: |
+          cd terraform
+          terraform apply -auto-approve \
+                          -var="project_id=${{ env.GCP_PROJECT_ID }}" \
+                          -var="region=${{ env.GCP_REGION }}" \
+                          -var="service_name=${{ env.SERVICE_NAME }}" \
+                          -var="image_tag=${{ github.sha }}"
+
+      # Build Docker Image with Multi-architecture support
+      - name: Build Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./app
+          file: ./app/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: false
+          tags: |
+            ${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY_REPO }}/${{ env.SERVICE_NAME }}:${{ github.sha }}
+            ${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY_REPO }}/${{ env.SERVICE_NAME }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          labels: |
+            org.opencontainers.image.source=${{ github.repositoryUrl }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}
+
+      # Security Scan of Docker Image
+      - name: Scan Docker Image for Vulnerabilities
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY_REPO }}/${{ env.SERVICE_NAME }}:${{ github.sha }}'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload Trivy Scan Results
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      # Push Docker Image to Artifact Registry
+      - name: Push Docker Image
+        run: |
+          docker push ${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY_REPO }}/${{ env.SERVICE_NAME }}:${{ github.sha }}
+          docker push ${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY_REPO }}/${{ env.SERVICE_NAME }}:latest
+
+      # Deploy to Cloud Run with proper security settings
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy ${{ env.SERVICE_NAME }} \
+            --image ${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY_REPO }}/${{ env.SERVICE_NAME }}:${{ github.sha }} \
+            --region ${{ env.GCP_REGION }} \
+            --platform managed \
+            --no-allow-unauthenticated \
+            --port ${{ env.CONTAINER_PORT }} \
+            --cpu 1 \
+            --memory 512Mi \
+            --min-instances 0 \
+            --max-instances 10 \
+            --concurrency 80 \
+            --timeout 300s \
+            --service-account ${{ env.SERVICE_NAME }}-sa@${{ env.GCP_PROJECT_ID }}.iam.gserviceaccount.com \
+            --update-labels "commit-sha=${{ github.sha }},deployed-by=github-actions" \
+            --quiet
+
+      # Configure IAM Policy for Private Access (Only specific service accounts)
+      - name: Configure Cloud Run IAM Policy
+        run: |
+          # Remove all users (ensures no public access)
+          gcloud run services remove-iam-policy-binding ${{ env.SERVICE_NAME }} \
+            --region ${{ env.GCP_REGION }} \
+            --member="allUsers" \
+            --role="roles/run.invoker" \
+            --quiet 2>/dev/null || true
+
+          # Add specific service account access
+          gcloud run services add-iam-policy-binding ${{ env.SERVICE_NAME }} \
+            --region ${{ env.GCP_REGION }} \
+            --member="serviceAccount:${{ env.SERVICE_NAME }}-sa@${{ env.GCP_PROJECT_ID }}.iam.gserviceaccount.com" \
+            --role="roles/run.invoker"
+
+      # Run Smoke Tests after deployment
+      - name: Run Smoke Tests
+        run: |
+          # Get the service URL
+          SERVICE_URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} \
+            --region ${{ env.GCP_REGION }} \
+            --format='value(status.url)')
+          
+          # Get authentication token
+          ACCESS_TOKEN=$(gcloud auth print-access-token)
+          
+          # Test health endpoint
+          echo "Testing health endpoint..."
+          curl -f -H "Authorization: Bearer $ACCESS_TOKEN" \
+            "$SERVICE_URL/health" || exit 1
+          
+          # Test main API endpoint
+          echo "Testing analyze endpoint..."
+          RESPONSE=$(curl -s -H "Authorization: Bearer $ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            -X POST "$SERVICE_URL/analyze" \
+            -d '{"text": "Smoke test from GitHub Actions"}')
+          
+          echo "Response: $RESPONSE"
+          
+          # Verify response contains expected fields
+          echo "$RESPONSE" | jq -e '.word_count' || exit 1
+          echo "$RESPONSE" | jq -e '.character_count' || exit 1
+
+      # Output deployment information
+      - name: Show Deployment Info
+        run: |
+          SERVICE_URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} \
+            --region ${{ env.GCP_REGION }} \
+            --format='value(status.url)')
+          
+          echo " Deployment Successful!"
+          echo " Service URL: $SERVICE_URL"
+          echo " Access Type: Private (requires authentication)"
+          echo "Image Tag: ${{ github.sha }}"
+          echo " Latest Tag also updated"
+          
+          # Set output for other jobs
+          echo "SERVICE_URL=$SERVICE_URL" >> $GITHUB_OUTPUT
+
+      # Create GitHub Release with changelog
+      - name: Create GitHub Release
+        if: success()
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ github.run_number }}
+          name: Release v${{ github.run_number }}
+          body: |
+            ## Changes in this release
+            - Auto-deployed from commit: ${{ github.sha }}
+            - Built and tested via GitHub Actions
+            - Deployed to Cloud Run (private access only)
+            
+            ### Deployment Details
+            - Service: ${{ env.SERVICE_NAME }}
+            - Region: ${{ env.GCP_REGION }}
+            - Image: ${{ env.SERVICE_NAME }}:${{ github.sha }}
+            
+         
+            
+          draft: false
+          prerelease: false
+
+      # # Send notification to Slack/Teams (optional)
+      # - name: Send Deployment Notification
+      #   if: success()
+      #   uses: 8398a7/action-slack@v3
+      #   with:
+      #     status: ${{ job.status }}
+      #     fields: repo,message,commit,author,action,eventName,ref,workflow,job,took
+      #   env:
+      #     SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      #   continue-on-error: true
+
+  # Rollback job (manual trigger only)
+  rollback:
+    runs-on: ubuntu-latest
+    if: failure() && github.ref == 'refs/heads/main'
+    needs: build-and-deploy
+    environment: production
     
-    # Only this step needs the secret
-    - name: Google Cloud Auth
-      uses: google-github-actions/auth@v1
-      with:
-        credentials_json: ${{ secrets.GCP_SA_KEY }}
-    
-    - name: Deploy with gcloud
-      run: |
-        gcloud run deploy insight-agent \
-          --image us-central1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/insight-agent-repo/insight-agent:latest \
-          --region us-central1 \
-          --platform managed \
-          --allow-unauthenticated \
-          --port 8080
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v1
+        with:
+          workload_identity_provider: 'projects/${{ secrets.GCP_PROJECT_NUMBER }}/locations/global/workloadIdentityPools/github-pool/providers/github-provider'
+          service_account: '${{ secrets.GCP_SERVICE_ACCOUNT }}'
+
+      - name: Rollback to Previous Revision
+        run: |
+          # Get previous revision
+          PREVIOUS_REVISION=$(gcloud run revisions list \
+            --service=${{ env.SERVICE_NAME }} \
+            --region=${{ env.GCP_REGION }} \
+            --format="value(REVISION)" \
+            --filter="trafficPercent>0" \
+            --limit=2 | tail -1)
+          
+          if [ -n "$PREVIOUS_REVISION" ]; then
+            echo "Rolling back to revision: $PREVIOUS_REVISION"
+            
+            gcloud run services update-traffic ${{ env.SERVICE_NAME }} \
+              --region ${{ env.GCP_REGION }} \
+              --to-revisions $PREVIOUS_REVISION=100
+            
+            echo " Rollback successful to $PREVIOUS_REVISION"
+          else
+            echo " No previous revision found for rollback"
+          fi
+
+      - name: Send Rollback Notification
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          text: " Rollback triggered for ${{ env.SERVICE_NAME }}"
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        continue-on-error: true
